@@ -209,7 +209,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("port must be 1..65535")
     try:
         if args.mode == "local-auto":
-            run_local_auto(args.port, debug=args.debug)
+            while True:
+                try:
+                    run_local_auto(args.port, debug=args.debug)
+                except (RuntimeError, OSError, EOFError, ValueError,
+                        subprocess.SubprocessError) as exc:
+                    print(f"[local-auto] Tunnel/adapter unavailable: {exc}; retrying",
+                          file=sys.stderr, flush=True)
+                    time.sleep(3)
         else:
             serve_remote_auto(args.target, args.port, debug=args.debug)
     except KeyboardInterrupt:
