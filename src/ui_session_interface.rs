@@ -1970,6 +1970,60 @@ impl<T: InvokeUiSession> Session<T> {
     }
 }
 
+#[cfg(windows)]
+fn start_automatic_profinet_dcp<T: InvokeUiSession>(
+    handler: Session<T>,
+    queues: &mut HashMap<i32, mpsc::UnboundedSender<Data>>,
+    key: &str,
+    token: &str,
+    target: &str,
+) -> Option<(i32, std::process::Child)> {
+    // Choose a private, short-lived local port. The server still terminates
+    // the DCP helper on loopback TCP/49092 after a tunnel-permitted login.
+    let local_port = match std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+    {
+        Ok(addr) => i32::from(addr.port()),
+        Err(err) => {
+            log::warn!("PROFINET DCP: cannot reserve local port: {}", err);
+            return None;
+        }
+    };
+    let (sender, receiver) = mpsc::unbounded_channel::<Data>();
+    queues.insert(local_port, sender);
+    let marker = crate::profinet_dcp::marker(target);
+    let key = key.to_owned();
+    let token = token.to_owned();
+    tokio::spawn(async move {
+        start_one_port_forward(
+            handler,
+            local_port,
+            marker,
+            crate::profinet_dcp::DCP_PORT,
+            receiver,
+            &key,
+            &token,
+        )
+        .await;
+    });
+    match crate::profinet_dcp::start_local(local_port as u16) {
+        Ok(child) => {
+            log::info!(
+                "PROFINET DCP: automatic Identify forwarding started for TCP/102 (loopback :{})",
+                local_port
+            );
+            Some((local_port, child))
+        }
+        Err(err) => {
+            log::warn!("PROFINET DCP: automatic forwarding unavailable: {}", err);
+            if let Some(sender) = queues.remove(&local_port) {
+                sender.send(Data::Close).ok();
+            }
+            None
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -2000,6 +2054,10 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
         } else if handler.args.len() == 0 {
             let pfs = handler.lc.read().unwrap().port_forwards.clone();
             let mut queues = HashMap::<i32, mpsc::UnboundedSender<Data>>::new();
+            #[cfg(windows)]
+            let mut profinet_targets = HashMap::<i32, String>::new();
+            #[cfg(windows)]
+            let mut profinet_child: Option<(i32, i32, std::process::Child)> = None;
             for d in pfs {
                 sender.send(Data::AddPortForward(d)).ok();
             }
@@ -2011,6 +2069,17 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
                         }
                         let (sender, receiver) = mpsc::unbounded_channel::<Data>();
                         queues.insert(port, sender);
+                        #[cfg(windows)]
+                        if remote_port == 102 {
+                            profinet_targets.insert(port, remote_host.clone());
+                            if profinet_child.is_none() {
+                                if let Some((dcp_port, child)) = start_automatic_profinet_dcp(
+                                    handler.clone(), &mut queues, &key, &token, &remote_host,
+                                ) {
+                                    profinet_child = Some((dcp_port, port, child));
+                                }
+                            }
+                        }
                         let handler = handler.clone();
                         let key = key.clone();
                         let token = token.clone();
@@ -2031,6 +2100,32 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
                         if let Some(s) = queues.remove(&port) {
                             s.send(Data::Close).ok();
                         }
+                        #[cfg(windows)]
+                        {
+                            profinet_targets.remove(&port);
+                            if profinet_child
+                                .as_ref()
+                                .map(|(_, triggering_port, _)| *triggering_port == port)
+                                .unwrap_or(false)
+                            {
+                                if let Some((hidden_port, _, mut child)) = profinet_child.take() {
+                                    child.kill().ok();
+                                    child.wait().ok();
+                                    if let Some(s) = queues.remove(&hidden_port) {
+                                        s.send(Data::Close).ok();
+                                    }
+                                }
+                                // If several PLC forwards exist, move the DCP
+                                // bridge to another TCP/102 mapping.
+                                if let Some((&next_port, next_host)) = profinet_targets.iter().next() {
+                                    if let Some((dcp_port, child)) = start_automatic_profinet_dcp(
+                                        handler.clone(), &mut queues, &key, &token, next_host,
+                                    ) {
+                                        profinet_child = Some((dcp_port, next_port, child));
+                                    }
+                                }
+                            }
+                        }
                     }
                     Some(Data::Close) => {
                         // Pass the close on before leaving: breaking alone drops the mappings
@@ -2038,6 +2133,11 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
                         // tell its peer it is closing (see the wait below).
                         for s in queues.values() {
                             s.send(Data::Close).ok();
+                        }
+                        #[cfg(windows)]
+                        if let Some((_, _, mut child)) = profinet_child.take() {
+                            child.kill().ok();
+                            child.wait().ok();
                         }
                         break;
                     }
