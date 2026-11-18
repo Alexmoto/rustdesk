@@ -1,5 +1,6 @@
 //! Windows-only, read-only PROFINET DCP Identify relay over RustDesk's existing
 //! authenticated TCP port-forward transport. No new unauthenticated listener.
+use std::os::windows::process::CommandExt;
 use std::{
     fs::OpenOptions,
     path::PathBuf,
@@ -64,6 +65,7 @@ fn spawn_helper(args: &[&str]) -> std::io::Result<Child> {
     let file = log_file()?;
     Command::new(helper_path()?)
         .args(args)
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW: no Python console pop-up
         .stdin(Stdio::null())
         .stdout(Stdio::from(file.try_clone()?))
         .stderr(Stdio::from(file))
