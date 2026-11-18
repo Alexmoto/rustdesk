@@ -194,7 +194,8 @@ def serve_remote_auto(target: str, port: int, *, debug: bool = False) -> None:
         f"[remote-auto] PLC target={target}; NIC={adapter.name}, MAC={adapter.mac.hex(':')}",
         flush=True,
     )
-    serve_remote(iface_name(adapter.guid), adapter.mac, port, debug=debug)
+    serve_remote(iface_name(adapter.guid), adapter.mac, port,
+                 debug=debug, single_connection=True)
 
 
 def main(argv: list[str] | None = None) -> int:
