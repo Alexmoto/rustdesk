@@ -361,7 +361,8 @@ def run_local(interface: str, local_mac: bytes, port: int, *, debug: bool = Fals
                 worker.join(timeout=1)
 
 
-def serve_remote(interface: str, remote_mac: bytes, port: int, *, debug: bool = False) -> None:
+def serve_remote(interface: str, remote_mac: bytes, port: int, *, debug: bool = False,
+                 single_connection: bool = False) -> None:
     """Listen only on loopback; RustDesk port forwarding terminates here."""
     api = Npcap()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -411,6 +412,8 @@ def serve_remote(interface: str, remote_mac: bytes, port: int, *, debug: bool = 
                     finally:
                         stop.set()
                         worker.join(timeout=1)
+            if single_connection:
+                return
 
 
 def main(argv: list[str] | None = None) -> int:
