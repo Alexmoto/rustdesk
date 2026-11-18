@@ -134,7 +134,7 @@ class _PortForwardPageState extends State<PortForwardPage>
     return Obx(() => Offstage(
           offstage: pfs.isEmpty && !widget.isRDP,
           child: Container(
-              height: pfs.any((pf) => pf.remotePort == 102) ? 68 : 45,
+              height: isWindows && pfs.any((pf) => pf.remotePort == 102) ? 68 : 45,
               color: const Color(0xFF007F00),
               child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -148,7 +148,7 @@ class _PortForwardPageState extends State<PortForwardPage>
                       style: const TextStyle(
                           fontSize: 10, color: Color(0xFFDDDDDD), height: 1.2),
                     ),
-                    if (pfs.any((pf) => pf.remotePort == 102))
+                    if (isWindows && pfs.any((pf) => pf.remotePort == 102))
                       const Text(
                         'PROFINET DCP: автопроброс при TCP 102 (Npcap на обоих ПК)',
                         style: TextStyle(fontSize: 11, color: Colors.white),
