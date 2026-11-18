@@ -966,6 +966,37 @@ def build_flutter_arch_manjaro(version, features):
     system2('HBB=`pwd`/.. FLUTTER=1 makepkg -f')
 
 
+def bundle_profinet_dcp_windows():
+    """Bundle the read-only DCP helper into the Flutter Windows Release folder.
+
+    Runtime requires Npcap >= 1.83 on both Windows computers, but no Python
+    installation. The helper is built as an onedir executable to avoid slow
+    onefile extraction before the first discovery request.
+    """
+    root = Path(REPO_ROOT)
+    script = root / 'tools' / 'profinet-dcp' / 'auto_bridge.py'
+    staging = root / 'target' / 'profinet-dcp-package'
+    dist = staging / 'dist'
+    work = staging / 'work'
+    staging.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable, '-m', 'PyInstaller',
+        '--noconfirm', '--onedir', '--name', 'rustdesk-profinet-dcp',
+        '--distpath', str(dist),
+        '--workpath', str(work),
+        '--specpath', str(staging),
+        str(script),
+    ]
+    print('Bundling PROFINET DCP helper into Windows Release...', flush=True)
+    subprocess.run(cmd, check=True)
+    package = dist / 'rustdesk-profinet-dcp'
+    if not (package / 'rustdesk-profinet-dcp.exe').is_file():
+        raise RuntimeError('PROFINET DCP helper executable not found after PyInstaller')
+    output = root / flutter_build_dir_2 / 'rustdesk-profinet-dcp'
+    shutil.copytree(package, output, dirs_exist_ok=True)
+    print(f'PROFINET DCP helper packaged: {output}', flush=True)
+
+
 def build_flutter_windows(version, features, skip_portable_pack):
     if not skip_cargo:
         system2(f'cargo build --locked --features {features} --lib --release')
@@ -977,6 +1008,7 @@ def build_flutter_windows(version, features, skip_portable_pack):
     os.chdir('..')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)
+    bundle_profinet_dcp_windows()
     if skip_portable_pack:
         return
     os.chdir('libs/portable')
