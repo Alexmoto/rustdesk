@@ -1795,6 +1795,10 @@ impl Connection {
             pf.port = 3389;
             is_rdp = true;
         }
+        #[cfg(windows)]
+        if crate::profinet_dcp::target_from_marker(&pf.host, pf.port).is_some() {
+            pf.host = "127.0.0.1".to_owned();
+        }
         if pf.host.is_empty() {
             pf.host = "localhost".to_owned();
         }
@@ -1818,8 +1822,20 @@ impl Connection {
             return self.port_forward_mux.is_some();
         }
         let mut pf = pf.clone();
+        #[cfg(windows)]
+        let dcp_target = crate::profinet_dcp::target_from_marker(&pf.host, pf.port)
+            .map(str::to_owned);
         let (mut addr, is_rdp) = Self::normalize_port_forward_target(&mut pf);
         self.port_forward_address = addr.clone();
+        #[cfg(windows)]
+        if let Some(target) = dcp_target {
+            if let Err(err) = crate::profinet_dcp::ensure_remote(&target) {
+                self.send_login_error(format!("PROFINET DCP bridge unavailable: {}", err))
+                    .await;
+                return false;
+            }
+            time::sleep(Duration::from_millis(750)).await;
+        }
         match timeout(3000, TcpStream::connect(&addr)).await {
             Ok(Ok(sock)) => {
                 self.port_forward_socket = Some(Framed::new(sock, BytesCodec::new()));
