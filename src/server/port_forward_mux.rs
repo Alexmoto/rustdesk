@@ -122,6 +122,9 @@ impl PortForwardMux {
             port: open.port,
             ..Default::default()
         };
+        #[cfg(windows)]
+        let dcp_target = crate::profinet_dcp::target_from_marker(&pf.host, pf.port)
+            .map(str::to_owned);
         let (addr, is_rdp) = Connection::normalize_port_forward_target(&mut pf);
         // Approval and permission checks saw the login's target; a tunnel
         // serves that one target and nothing else.
@@ -135,6 +138,13 @@ impl PortForwardMux {
             self.reply(opened_msg(id, false, "Port forward target not authorized", 0));
             return;
         }
+        #[cfg(windows)]
+        if let Some(target) = dcp_target.as_deref() {
+            if let Err(err) = crate::profinet_dcp::ensure_remote(target) {
+                self.reply(opened_msg(id, false, &format!("PROFINET DCP bridge: {}", err), 0));
+                return;
+            }
+        }
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
         let credit = Arc::new(SendCredit::new(effective_window(open.window)));
         let window = Arc::new(Mutex::new(RecvWindow::new(INITIAL_WINDOW)));
@@ -146,16 +156,17 @@ impl PortForwardMux {
                 window: window.clone(),
             },
         );
-        tokio::spawn(run_controlled_channel(
-            id,
-            addr,
-            is_rdp,
-            credit,
-            window,
-            inbound_rx,
-            FrameSink::Direct(self.tx.clone()),
-            self.teardown.subscribe(),
-        ));
+        let sink = FrameSink::Direct(self.tx.clone());
+        let teardown = self.teardown.subscribe();
+        tokio::spawn(async move {
+            #[cfg(windows)]
+            if dcp_target.is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            }
+            run_controlled_channel(
+                id, addr, is_rdp, credit, window, inbound_rx, sink, teardown,
+            ).await;
+        });
     }
 
     fn reply(&self, msg: Message) {
